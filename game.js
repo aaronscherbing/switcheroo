@@ -32,14 +32,24 @@ class Card {
 
 class Game {
     constructor() {
+        // Get device dimensions
+        const isMobile = window.innerWidth < 768;
+        const gameWidth = isMobile ? window.innerWidth : Math.min(1200, window.innerWidth);
+        const gameHeight = isMobile ? window.innerHeight : Math.min(900, window.innerHeight);
+        
         // Initialize PixiJS with v7 syntax
         this.app = new PIXI.Application({
-            width: 1200,
-            height: 900,
+            width: gameWidth,
+            height: gameHeight,
             backgroundColor: 0x2c3e50,
-            antialias: true
+            antialias: true,
+            resolution: window.devicePixelRatio || 1,
+            autoDensity: true
         });
         document.body.appendChild(this.app.view);
+        
+        this.isMobile = isMobile;
+        this.scale = isMobile ? Math.min(gameWidth / 1200, gameHeight / 900) : 1;
 
         // Game state
         this.currentPlayer = 0; // 0 = bottom, 1 = top
@@ -136,16 +146,20 @@ class Game {
         // Position grid in center
         const gridWidth = GRID_COLS * (TILE_SIZE + TILE_PADDING);
         const gridHeight = GRID_ROWS * (TILE_SIZE + TILE_PADDING);
+        
+        // Adjust spacing for mobile
+        const verticalSpacing = this.isMobile ? 20 : 40;
+        
         this.gridContainer.x = centerX - gridWidth / 2;
         this.gridContainer.y = centerY - gridHeight / 2;
 
         // Position player 0 space (bottom)
         this.player0Container.x = centerX - gridWidth / 2;
-        this.player0Container.y = this.gridContainer.y + gridHeight + 40;
+        this.player0Container.y = this.gridContainer.y + gridHeight + verticalSpacing;
 
         // Position player 1 space (top)
         this.player1Container.x = centerX - gridWidth / 2;
-        this.player1Container.y = this.gridContainer.y - (PLAYER_ROWS * (TILE_SIZE + TILE_PADDING)) - 40;
+        this.player1Container.y = this.gridContainer.y - (PLAYER_ROWS * (TILE_SIZE + TILE_PADDING)) - verticalSpacing;
     }
 
     render() {
@@ -980,12 +994,15 @@ class Game {
     }
 
     renderUI() {
-        const margin = 20;
+        const margin = this.isMobile ? 10 : 20;
+        const labelSize = this.isMobile ? 18 : 24;
+        const heartSize = this.isMobile ? 30 : 35;
+        const heartSpacing = this.isMobile ? 35 : 45;
         
         // Player 1 label and hearts (bottom)
         const player1Label = new PIXI.Text('PLAYER 1', {
             fontFamily: 'Arial',
-            fontSize: 24,
+            fontSize: labelSize,
             fontWeight: 'bold',
             fill: this.currentPlayer === 0 ? 0xf1c40f : 0x7f8c8d,
             align: 'left',
@@ -993,20 +1010,20 @@ class Game {
             strokeThickness: this.currentPlayer === 0 ? 2 : 0
         });
         player1Label.x = margin;
-        player1Label.y = this.app.screen.height - 100;
+        player1Label.y = this.app.screen.height - (this.isMobile ? 80 : 100);
         this.uiContainer.addChild(player1Label);
         
         for (let i = 0; i < MAX_HEARTS; i++) {
-            const heart = this.createHeart(i < this.playerHearts[0]);
-            heart.x = margin + i * 45;
-            heart.y = this.app.screen.height - 60;
+            const heart = this.createHeart(i < this.playerHearts[0], heartSize);
+            heart.x = margin + i * heartSpacing;
+            heart.y = this.app.screen.height - (this.isMobile ? 50 : 60);
             this.uiContainer.addChild(heart);
         }
 
         // Player 2 label and hearts (top)
         const player2Label = new PIXI.Text('PLAYER 2', {
             fontFamily: 'Arial',
-            fontSize: 24,
+            fontSize: labelSize,
             fontWeight: 'bold',
             fill: this.currentPlayer === 1 ? 0xf1c40f : 0x7f8c8d,
             align: 'left',
@@ -1018,9 +1035,9 @@ class Game {
         this.uiContainer.addChild(player2Label);
         
         for (let i = 0; i < MAX_HEARTS; i++) {
-            const heart = this.createHeart(i < this.playerHearts[1]);
-            heart.x = margin + i * 45;
-            heart.y = margin + 35;
+            const heart = this.createHeart(i < this.playerHearts[1], heartSize);
+            heart.x = margin + i * heartSpacing;
+            heart.y = margin + (this.isMobile ? 25 : 35);
             this.uiContainer.addChild(heart);
         }
 
@@ -1038,19 +1055,24 @@ class Game {
         turnText.y = margin;
         this.uiContainer.addChild(turnText);
 
-        // Instructions
-        const instructions = new PIXI.Text(
-            'Move tiles (2 per turn)\n\nSelect card\nUse arrow buttons\nto arrange\n(costs moves)\n\nClick pink to boost\nClick ✓ to spend',
-            {
-                fontFamily: 'Arial',
-                fontSize: 11,
-                fill: 0xbdc3c7,
-                align: 'center'
-            }
-        );
-        instructions.x = this.app.screen.width - 150;
-        instructions.y = 80;
-        this.uiContainer.addChild(instructions);
+        // Instructions (hide on very small screens)
+        if (!this.isMobile || this.app.screen.width > 600) {
+            const instructionSize = this.isMobile ? 9 : 11;
+            const instructions = new PIXI.Text(
+                this.isMobile ? 
+                'Tap tile\nUse arrows\nTap ✓ to spend' :
+                'Move tiles (2 per turn)\n\nSelect card\nUse arrow buttons\nto arrange\n(costs moves)\n\nClick pink to boost\nClick ✓ to spend',
+                {
+                    fontFamily: 'Arial',
+                    fontSize: instructionSize,
+                    fill: 0xbdc3c7,
+                    align: 'center'
+                }
+            );
+            instructions.x = this.app.screen.width - (this.isMobile ? 80 : 150);
+            instructions.y = this.isMobile ? 60 : 80;
+            this.uiContainer.addChild(instructions);
+        }
 
         // Show boost helper text if attack is selected
         if (this.selectedPlaySpaceCard && this.selectedPlaySpaceCard.player === this.currentPlayer) {
@@ -1079,7 +1101,12 @@ class Game {
         }
 
         // End turn button - make it bigger and more prominent
-        const endTurnBtn = this.createButton('End Turn', this.app.screen.width - 150, 320, 120, 50);
+        const btnWidth = this.isMobile ? 100 : 120;
+        const btnHeight = this.isMobile ? 45 : 50;
+        const btnX = this.app.screen.width - (this.isMobile ? 110 : 150);
+        const btnY = this.app.screen.height - (this.isMobile ? 60 : 80);
+        
+        const endTurnBtn = this.createButton('End Turn', btnX, btnY, btnWidth, btnHeight);
         endTurnBtn.on('pointerdown', () => this.endTurn());
         this.uiContainer.addChild(endTurnBtn);
 
@@ -1092,7 +1119,7 @@ class Game {
         }
     }
 
-    createHeart(filled) {
+    createHeart(filled, size = 35) {
         const heart = new PIXI.Graphics();
         if (filled) {
             heart.beginFill(0xe74c3c);
@@ -1101,18 +1128,18 @@ class Game {
         }
         
         // Simple heart shape (rectangle for now)
-        heart.drawRoundedRect(0, 0, 35, 35, 5);
+        heart.drawRoundedRect(0, 0, size, size, 5);
         heart.endFill();
 
         // Add heart symbol
         const text = new PIXI.Text('♥', {
             fontFamily: 'Arial',
-            fontSize: 24,
+            fontSize: size * 0.7,
             fill: filled ? 0xffffff : 0x7f8c8d
         });
         text.anchor.set(0.5);
-        text.x = 17.5;
-        text.y = 17.5;
+        text.x = size / 2;
+        text.y = size / 2;
         heart.addChild(text);
 
         return heart;
@@ -1305,6 +1332,9 @@ class Game {
     }
 
     renderLegend() {
+        // Hide legend on mobile to save space
+        if (this.isMobile) return;
+        
         const legendX = 20;
         const legendY = this.app.screen.height / 2 - 150;
         const lineHeight = 30;
