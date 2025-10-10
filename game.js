@@ -46,6 +46,8 @@ class Game {
         this.turnCount = [0, 0]; // Track turns for each player
         this.movesLeft = MOVES_PER_TURN;
         this.selectedTile = null;
+        this.selectedPlaySpaceCard = null; // For moving cards within play space
+        this.selectedBoostCards = []; // For selecting multiple boost cards with attacks
         this.grid = []; // 4x3 grid
         this.playerSpaces = [[], []]; // Player 0 (bottom) and Player 1 (top)
         this.playerHearts = [MAX_HEARTS, MAX_HEARTS];
@@ -470,6 +472,20 @@ class Game {
     renderPlayerSpace(player) {
         const container = player === 0 ? this.player0Container : this.player1Container;
         
+        // Add highlight around active player's area
+        if (player === this.currentPlayer && !this.gameOver) {
+            const highlight = new PIXI.Graphics();
+            const padding = 15;
+            const width = PLAYER_COLS * (TILE_SIZE + TILE_PADDING) + padding * 2;
+            const height = PLAYER_ROWS * (TILE_SIZE + TILE_PADDING) + padding * 2;
+            
+            highlight.lineStyle(4, 0xf1c40f, 1);
+            highlight.beginFill(0xf1c40f, 0.05);
+            highlight.drawRoundedRect(-padding, -padding, width, height, 12);
+            highlight.endFill();
+            container.addChild(highlight);
+        }
+        
         for (let row = 0; row < PLAYER_ROWS; row++) {
             for (let col = 0; col < PLAYER_COLS; col++) {
                 const card = this.playerSpaces[player][row][col];
@@ -502,29 +518,38 @@ class Game {
                 
                 slotContainer.addChild(slot);
                 
-                // Make slots clickable for tile placement
-                if (player === this.currentPlayer && !this.gameOver && !card) {
+                // Make slots clickable for tile placement or moving cards
+                if (player === this.currentPlayer && !this.gameOver) {
                     slotContainer.interactive = true;
                     slotContainer.buttonMode = true;
                     slotContainer._slotData = { row, col, player };
                     
-                    slotContainer.on('pointerdown', () => {
-                        this.handleTileClick(row, col, 'playerSpace', player);
-                    });
-                    
-                    slotContainer.on('pointerover', () => {
-                        if (this.selectedTile) {
-                            slot.clear();
-                            slot.lineStyle(3, 0x2ecc71);
-                            slot.beginFill(0x2ecc71, 0.2);
-                            slot.drawRoundedRect(0, 0, TILE_SIZE, TILE_SIZE, 8);
-                            slot.endFill();
-                        }
-                    });
-                    
-                    slotContainer.on('pointerout', () => {
-                        this.render();
-                    });
+                    if (!card) {
+                        // Empty slot - for placing tiles from grid or moving cards
+                        slotContainer.on('pointerdown', () => {
+                            // Try to place from grid first
+                            if (this.selectedTile) {
+                                this.handleTileClick(row, col, 'playerSpace', player);
+                            } else {
+                                // Try to move card here
+                                this.handlePlaySpaceClick(player, row, col);
+                            }
+                        });
+                        
+                        slotContainer.on('pointerover', () => {
+                            if (this.selectedTile) {
+                                slot.clear();
+                                slot.lineStyle(3, 0x2ecc71);
+                                slot.beginFill(0x2ecc71, 0.2);
+                                slot.drawRoundedRect(0, 0, TILE_SIZE, TILE_SIZE, 8);
+                                slot.endFill();
+                            }
+                        });
+                        
+                        slotContainer.on('pointerout', () => {
+                            this.render();
+                        });
+                    }
                 }
                 
                 container.addChild(slotContainer);
@@ -532,10 +557,143 @@ class Game {
                 // Draw card if present
                 if (card) {
                     const tile = this.createTileForPlayerSpace(card, col, row, player);
+                    
+                    // Highlight if selected for moving/spending
+                    if (this.selectedPlaySpaceCard && 
+                        this.selectedPlaySpaceCard.player === player &&
+                        this.selectedPlaySpaceCard.row === row &&
+                        this.selectedPlaySpaceCard.col === col) {
+                        const highlight = new PIXI.Graphics();
+                        highlight.lineStyle(4, 0xf39c12);
+                        highlight.drawRoundedRect(0, 0, TILE_SIZE, TILE_SIZE, 8);
+                        tile.addChild(highlight);
+                    }
+                    
+                    // Highlight if selected as a boost card
+                    const isBoostSelected = this.selectedBoostCards.some(b => 
+                        b.player === player && b.row === row && b.col === col
+                    );
+                    if (isBoostSelected) {
+                        const boostHighlight = new PIXI.Graphics();
+                        boostHighlight.lineStyle(4, 0x2ecc71); // Green for boost
+                        boostHighlight.drawRoundedRect(0, 0, TILE_SIZE, TILE_SIZE, 8);
+                        tile.addChild(boostHighlight);
+                    }
+                    
                     container.addChild(tile);
                 }
             }
         }
+        
+        // Add control buttons at the end of player space (for selected card)
+        if (player === this.currentPlayer && !this.gameOver && this.selectedPlaySpaceCard && 
+            this.selectedPlaySpaceCard.player === player) {
+            const selected = this.selectedPlaySpaceCard;
+            const selectedCard = this.playerSpaces[selected.player][selected.row][selected.col];
+            
+            if (selectedCard) {
+                const buttonX = PLAYER_COLS * (TILE_SIZE + TILE_PADDING) + 20;
+                const buttonY = selected.row * (TILE_SIZE + TILE_PADDING) + TILE_SIZE / 2;
+                const buttonSize = 35;
+                const buttonSpacing = 45;
+                
+                // Left arrow button
+                if (selected.col > 0) {
+                    const leftBtn = this.createArrowButton('left', buttonX, buttonY - buttonSpacing, buttonSize);
+                    leftBtn.on('pointerdown', () => {
+                        this.moveCardLeft(player, selected.row, selected.col);
+                    });
+                    container.addChild(leftBtn);
+                }
+                
+                // Spend button (if spendable)
+                const canSpend = selectedCard.type === CardType.ATTACK || 
+                                selectedCard.type === CardType.SHIELD || 
+                                selectedCard.type === CardType.SPECIAL;
+                
+                if (canSpend) {
+                    const spendBtn = this.createIconButton('spend', buttonX, buttonY, buttonSize);
+                    spendBtn.on('pointerdown', () => {
+                        this.spendCard(player, selected.row, selected.col);
+                    });
+                    container.addChild(spendBtn);
+                }
+                
+                // Right arrow button
+                if (selected.col < PLAYER_COLS - 1) {
+                    const rightBtn = this.createArrowButton('right', buttonX, buttonY + buttonSpacing, buttonSize);
+                    rightBtn.on('pointerdown', () => {
+                        this.moveCardRight(player, selected.row, selected.col);
+                    });
+                    container.addChild(rightBtn);
+                }
+            }
+        }
+    }
+
+    createArrowButton(direction, x, y, size) {
+        const btn = new PIXI.Container();
+        btn.x = x;
+        btn.y = y - size / 2;
+        
+        const bg = new PIXI.Graphics();
+        bg.beginFill(0x3498db);
+        bg.drawRoundedRect(0, 0, size, size, 5);
+        bg.endFill();
+        btn.addChild(bg);
+        
+        // Draw arrow
+        const arrow = new PIXI.Graphics();
+        arrow.beginFill(0xffffff);
+        if (direction === 'left') {
+            arrow.moveTo(size * 0.6, size * 0.3);
+            arrow.lineTo(size * 0.3, size * 0.5);
+            arrow.lineTo(size * 0.6, size * 0.7);
+        } else {
+            arrow.moveTo(size * 0.4, size * 0.3);
+            arrow.lineTo(size * 0.7, size * 0.5);
+            arrow.lineTo(size * 0.4, size * 0.7);
+        }
+        arrow.endFill();
+        btn.addChild(arrow);
+        
+        btn.interactive = true;
+        btn.buttonMode = true;
+        btn.on('pointerover', () => bg.tint = 0xcccccc);
+        btn.on('pointerout', () => bg.tint = 0xffffff);
+        
+        return btn;
+    }
+
+    createIconButton(type, x, y, size) {
+        const btn = new PIXI.Container();
+        btn.x = x;
+        btn.y = y - size / 2;
+        
+        const bg = new PIXI.Graphics();
+        bg.beginFill(0x27ae60); // Green for spend
+        bg.drawRoundedRect(0, 0, size, size, 5);
+        bg.endFill();
+        btn.addChild(bg);
+        
+        // Draw icon
+        const icon = new PIXI.Text('✓', {
+            fontFamily: 'Arial',
+            fontSize: 24,
+            fontWeight: 'bold',
+            fill: 0xffffff
+        });
+        icon.anchor.set(0.5);
+        icon.x = size / 2;
+        icon.y = size / 2;
+        btn.addChild(icon);
+        
+        btn.interactive = true;
+        btn.buttonMode = true;
+        btn.on('pointerover', () => bg.tint = 0xcccccc);
+        btn.on('pointerout', () => bg.tint = 0xffffff);
+        
+        return btn;
     }
 
     createTileForPlayerSpace(card, col, row, player) {
@@ -574,18 +732,14 @@ class Game {
             container.addChild(text);
         }
 
-        // Make clickable for spending cards - only spendable card types
-        const canSpend = card.type === CardType.ATTACK || 
-                        card.type === CardType.SHIELD || 
-                        card.type === CardType.SPECIAL ||
-                        card.type === CardType.BOOST;
-        
-        if (player === this.currentPlayer && !this.gameOver && canSpend) {
+        // Make clickable for spending/moving cards
+        if (player === this.currentPlayer && !this.gameOver) {
             container.interactive = true;
             container.buttonMode = true;
             
+            // Single click to select for moving/spending
             container.on('pointerdown', () => {
-                this.spendCard(player, row, col);
+                this.handlePlaySpaceClick(player, row, col);
             });
             
             container.on('pointerover', () => {
@@ -598,6 +752,142 @@ class Game {
         }
 
         return container;
+    }
+
+    handlePlaySpaceClick(player, row, col) {
+        const card = this.playerSpaces[player][row][col];
+        if (!card) {
+            // Clicked empty space - deselect
+            this.selectedPlaySpaceCard = null;
+            this.selectedBoostCards = [];
+            this.render();
+            return;
+        }
+        
+        // Clicked a card
+        if (!this.selectedPlaySpaceCard) {
+            // Select this card
+            this.selectedPlaySpaceCard = { player, row, col };
+            this.selectedBoostCards = []; // Clear boost selection when selecting new card
+            this.render();
+        } else {
+            const selected = this.selectedPlaySpaceCard;
+            const selectedCard = this.playerSpaces[selected.player][selected.row][selected.col];
+            
+            // Check if clicking a boost card when an attack is selected
+            if (selectedCard && selectedCard.type === CardType.ATTACK && card.type === CardType.BOOST) {
+                // Toggle boost card selection
+                const boostIndex = this.selectedBoostCards.findIndex(b => b.row === row && b.col === col);
+                if (boostIndex >= 0) {
+                    // Already selected, deselect it
+                    this.selectedBoostCards.splice(boostIndex, 1);
+                } else {
+                    // Add to boosts
+                    this.selectedBoostCards.push({ player, row, col, card });
+                }
+                this.render();
+                return;
+            }
+            
+            // Check if clicking the same card (deselect)
+            if (selected.row === row && selected.col === col && selected.player === player) {
+                // Deselect
+                this.selectedPlaySpaceCard = null;
+                this.selectedBoostCards = [];
+                this.render();
+                return;
+            }
+            
+            // Select new card
+            this.selectedPlaySpaceCard = { player, row, col };
+            this.selectedBoostCards = [];
+            this.render();
+        }
+    }
+
+    moveCardLeft(player, row, col) {
+        if (this.movesLeft <= 0) {
+            this.showMessage('No moves left!');
+            return;
+        }
+        
+        if (col <= 0) {
+            this.showMessage("Can't move left!");
+            return;
+        }
+        
+        const card = this.playerSpaces[player][row][col];
+        const targetCol = col - 1;
+        
+        // Remove card from current position
+        this.playerSpaces[player][row][col] = null;
+        
+        // Find furthest available position in target column with gravity
+        const finalRow = this.applyGravity(player, targetCol, card);
+        
+        // Update selection to follow the card
+        this.selectedPlaySpaceCard = { player, row: finalRow, col: targetCol };
+        this.movesLeft--;
+        this.render();
+    }
+
+    moveCardRight(player, row, col) {
+        if (this.movesLeft <= 0) {
+            this.showMessage('No moves left!');
+            return;
+        }
+        
+        if (col >= PLAYER_COLS - 1) {
+            this.showMessage("Can't move right!");
+            return;
+        }
+        
+        const card = this.playerSpaces[player][row][col];
+        const targetCol = col + 1;
+        
+        // Remove card from current position
+        this.playerSpaces[player][row][col] = null;
+        
+        // Find furthest available position in target column with gravity
+        const finalRow = this.applyGravity(player, targetCol, card);
+        
+        // Update selection to follow the card
+        this.selectedPlaySpaceCard = { player, row: finalRow, col: targetCol };
+        this.movesLeft--;
+        this.render();
+    }
+
+    applyGravity(player, col, card) {
+        // Player 0 (bottom): gravity pulls down to row 1 (bottom)
+        // Player 1 (top): gravity pulls up to row 0 (top)
+        
+        if (player === 0) {
+            // Check bottom row first (row 1), then top row (row 0)
+            if (!this.playerSpaces[player][1][col]) {
+                this.playerSpaces[player][1][col] = card;
+                return 1;
+            } else if (!this.playerSpaces[player][0][col]) {
+                this.playerSpaces[player][0][col] = card;
+                return 0;
+            } else {
+                // Column is full - shouldn't happen but handle it
+                this.playerSpaces[player][0][col] = card;
+                return 0;
+            }
+        } else {
+            // Player 1 - check top row first (row 0), then bottom row (row 1)
+            if (!this.playerSpaces[player][0][col]) {
+                this.playerSpaces[player][0][col] = card;
+                return 0;
+            } else if (!this.playerSpaces[player][1][col]) {
+                this.playerSpaces[player][1][col] = card;
+                return 1;
+            } else {
+                // Column is full - shouldn't happen but handle it
+                this.playerSpaces[player][1][col] = card;
+                return 1;
+            }
+        }
     }
 
     spendCard(player, row, col) {
@@ -614,25 +904,79 @@ class Game {
 
         switch(card.type) {
             case CardType.ATTACK:
-                this.playerHearts[opponent] = Math.max(0, this.playerHearts[opponent] - card.value);
+                // Calculate total damage including boosts
+                let totalDamage = card.value;
+                this.selectedBoostCards.forEach(boost => {
+                    totalDamage += boost.card.value;
+                });
+                
+                // Apply damage to opponent (shields first, then hearts)
+                const damageResult = this.applyDamage(opponent, totalDamage);
+                
+                // Remove attack card
                 this.playerSpaces[player][row][col] = null;
+                
+                // Remove boost cards
+                this.selectedBoostCards.forEach(boost => {
+                    this.playerSpaces[player][boost.row][boost.col] = null;
+                });
+                
+                // Show damage message
+                let message = `-${totalDamage} damage!`;
+                if (damageResult.shieldsUsed > 0) {
+                    message += ` (${damageResult.shieldsUsed} shield${damageResult.shieldsUsed > 1 ? 's' : ''} blocked)`;
+                }
+                this.showMessage(message);
+                
+                this.selectedPlaySpaceCard = null;
+                this.selectedBoostCards = [];
                 this.checkGameOver();
                 break;
             
             case CardType.SHIELD:
+                // Shields just stay in play space - they're used when attacked
+                // But we still allow manual use to gain a heart
                 this.playerHearts[player] = Math.min(MAX_HEARTS, this.playerHearts[player] + card.value);
                 this.playerSpaces[player][row][col] = null;
+                this.selectedPlaySpaceCard = null;
+                this.showMessage('+1♥');
                 break;
             
             case CardType.SPECIAL:
                 // Grant extra move
                 this.movesLeft += 1;
                 this.playerSpaces[player][row][col] = null;
+                this.selectedPlaySpaceCard = null;
                 this.showMessage('+1 Move!');
                 break;
         }
 
         this.render();
+    }
+
+    applyDamage(player, damage) {
+        let remainingDamage = damage;
+        let shieldsUsed = 0;
+        
+        // First, use shields from player's play space
+        for (let row = 0; row < PLAYER_ROWS && remainingDamage > 0; row++) {
+            for (let col = 0; col < PLAYER_COLS && remainingDamage > 0; col++) {
+                const card = this.playerSpaces[player][row][col];
+                if (card && card.type === CardType.SHIELD) {
+                    // Use this shield to block damage
+                    remainingDamage -= card.value;
+                    this.playerSpaces[player][row][col] = null; // Remove shield
+                    shieldsUsed++;
+                }
+            }
+        }
+        
+        // Then, apply remaining damage to hearts
+        if (remainingDamage > 0) {
+            this.playerHearts[player] = Math.max(0, this.playerHearts[player] - remainingDamage);
+        }
+        
+        return { shieldsUsed, heartsLost: Math.min(this.playerHearts[player], remainingDamage) };
     }
 
     renderUI() {
@@ -643,8 +987,10 @@ class Game {
             fontFamily: 'Arial',
             fontSize: 24,
             fontWeight: 'bold',
-            fill: this.currentPlayer === 0 ? 0xf1c40f : 0xffffff,
-            align: 'left'
+            fill: this.currentPlayer === 0 ? 0xf1c40f : 0x7f8c8d,
+            align: 'left',
+            stroke: this.currentPlayer === 0 ? 0x000000 : 0x000000,
+            strokeThickness: this.currentPlayer === 0 ? 2 : 0
         });
         player1Label.x = margin;
         player1Label.y = this.app.screen.height - 100;
@@ -662,8 +1008,10 @@ class Game {
             fontFamily: 'Arial',
             fontSize: 24,
             fontWeight: 'bold',
-            fill: this.currentPlayer === 1 ? 0xf1c40f : 0xffffff,
-            align: 'left'
+            fill: this.currentPlayer === 1 ? 0xf1c40f : 0x7f8c8d,
+            align: 'left',
+            stroke: this.currentPlayer === 1 ? 0x000000 : 0x000000,
+            strokeThickness: this.currentPlayer === 1 ? 2 : 0
         });
         player2Label.x = margin;
         player2Label.y = margin;
@@ -692,10 +1040,10 @@ class Game {
 
         // Instructions
         const instructions = new PIXI.Text(
-            'Move tiles OR\nSpend cards from\nplay space\n\nClick End Turn\nwhen done',
+            'Move tiles (2 per turn)\n\nSelect card\nUse arrow buttons\nto arrange\n(costs moves)\n\nClick pink to boost\nClick ✓ to spend',
             {
                 fontFamily: 'Arial',
-                fontSize: 14,
+                fontSize: 11,
                 fill: 0xbdc3c7,
                 align: 'center'
             }
@@ -704,8 +1052,34 @@ class Game {
         instructions.y = 80;
         this.uiContainer.addChild(instructions);
 
+        // Show boost helper text if attack is selected
+        if (this.selectedPlaySpaceCard && this.selectedPlaySpaceCard.player === this.currentPlayer) {
+            const card = this.playerSpaces[this.selectedPlaySpaceCard.player][this.selectedPlaySpaceCard.row][this.selectedPlaySpaceCard.col];
+            if (card && card.type === CardType.ATTACK) {
+                let helperMessage = 'Click pink cards to add boosts!';
+                if (this.selectedBoostCards.length > 0) {
+                    const totalDamage = card.value + this.selectedBoostCards.length;
+                    helperMessage = `Total Damage: -${totalDamage}`;
+                }
+                
+                const helperText = new PIXI.Text(helperMessage, {
+                    fontFamily: 'Arial',
+                    fontSize: 14,
+                    fill: this.selectedBoostCards.length > 0 ? 0xf39c12 : 0xff69b4,
+                    align: 'center',
+                    fontWeight: 'bold',
+                    stroke: 0x000000,
+                    strokeThickness: 2
+                });
+                helperText.x = this.app.screen.width / 2;
+                helperText.y = this.currentPlayer === 0 ? this.app.screen.height - 140 : 180;
+                helperText.anchor.set(0.5);
+                this.uiContainer.addChild(helperText);
+            }
+        }
+
         // End turn button - make it bigger and more prominent
-        const endTurnBtn = this.createButton('End Turn', this.app.screen.width - 150, 190, 120, 50);
+        const endTurnBtn = this.createButton('End Turn', this.app.screen.width - 150, 320, 120, 50);
         endTurnBtn.on('pointerdown', () => this.endTurn());
         this.uiContainer.addChild(endTurnBtn);
 
@@ -778,6 +1152,8 @@ class Game {
         if (this.gameOver) return;
         
         this.selectedTile = null;
+        this.selectedPlaySpaceCard = null;
+        this.selectedBoostCards = [];
         this.currentPlayer = 1 - this.currentPlayer;
         this.turnCount[this.currentPlayer]++;
         this.movesLeft = MOVES_PER_TURN;
@@ -946,7 +1322,7 @@ class Game {
         const legendItems = [
             { color: 0x9b59b6, text: 'Purple: Attack (-1, -2)', symbol: '-1' },
             { color: 0xe74c3c, text: 'Red: +1 Heart (instant)', symbol: '+1♥' },
-            { color: 0x3498db, text: 'Blue: +1 Heart (save)', symbol: '+1♥' },
+            { color: 0x3498db, text: 'Blue: Shield (auto-block)', symbol: '+1♥' },
             { color: 0xe67e22, text: 'Orange: Extra Move', symbol: '+M' },
             { color: 0xff69b4, text: 'Pink: +1 Attack Boost', symbol: '+1' },
             { color: 0x000000, text: 'Black X: Barrier (blocks)', symbol: '⊗' }
